@@ -284,3 +284,4 @@ The dashboard uses modern Python and PyQt6:
 - [ ] Stint timer
 - [ ] Export telemetry to CSV
 - [ ] Recording/playback mode
+# OnTrack
