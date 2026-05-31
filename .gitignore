@@ -58,5 +58,9 @@ Thumbs.db
 # (Don't commit actual game files)
 game_plugin/config.ini.bak
 
-# Dashboard config (user-specific)
-dashboard/.config/
+# Dashboard runtime / user-specific
+dashboard.log
+ontrack_dashboard/.config/
+
+# Ruff
+.ruff_cache/

@@ -1,287 +1,174 @@
 # OnTrack — Assetto Corsa Telemetry Dashboard
 
-A comprehensive real-time telemetry dashboard for Assetto Corsa consisting of an in-game Python plugin and an external PyQt6 dashboard application.
+A real-time telemetry dashboard for Assetto Corsa. PyQt6 desktop app that
+speaks AC's built-in UDP remote-telemetry protocol — **no in-game plugin
+required**, no AC config edits, no firewall holes for same-machine setups.
 
 ## Features
 
-- **Real-time Telemetry Display**
-  - Speed gauge with analog needle
-  - RPM bar with shift indicator
-  - Throttle and brake input visualization
-  - Current/best/last lap times with delta coloring
-  - Gear display (R/N/1-9)
-  - Tire temperature monitoring with color-coded temps
-
-- **Network Communication**
-  - Plugin broadcasts UDP packets at ~30Hz
-  - Dashboard receives UDP on configurable IP/port
-  - Works across machines (game on Windows, dashboard on Mac, etc.)
-
-- **Customizable Settings**
-  - UDP IP and port configuration
-  - Dark/light mode toggle
-  - Per-widget visibility controls
-  - Speed unit selection (km/h or mph)
-  - Max RPM calibration
+- Speed gauge, RPM bar with shift indicator, gear display
+- Throttle / brake input bars
+- Current / best / last lap times with delta vs. best
+- G-forces visualised via the existing read-outs
+- Auto-handshake: starts polling AC every 2 s, connects the moment a
+  session begins, reconnects after a session restart
+- Dark / light mode, km/h or mph, configurable max RPM, per-widget
+  visibility toggles
 
 ## Architecture
 
 ```
 OnTrack/
-├── game_plugin/              # Assetto Corsa in-game plugin
-│   ├── OnTrack.py            # Main plugin (Python 3.3)
-│   ├── OnTrack.ini           # AC app metadata
-│   ├── config.py             # Config reader
-│   └── config.ini            # User settings
-└── dashboard/                # External dashboard application
-    ├── main.py               # Entry point
-    ├── app.py                # Main window
-    ├── requirements.txt      # Python dependencies
-    ├── widgets/              # Display widgets
-    │   ├── speed_gauge.py    # Analog speed gauge
-    │   ├── rpm_bar.py        # RPM bar with shift light
-    │   ├── pedals.py         # Throttle/brake bars
-    │   ├── lap_times.py      # Lap time display
-    │   ├── gear_display.py   # Gear number display
-    │   └── tire_temps.py     # Tire temperature display
-    ├── settings/             # Configuration
-    │   ├── config_manager.py # Settings file I/O
-    │   └── settings_dialog.py# Settings GUI
-    └── network/              # Networking
-        └── udp_receiver.py   # UDP listener thread
+├── pyproject.toml             # Package metadata, deps, entry points
+├── ontrack_dashboard/         # Dashboard package (Python 3.10+)
+│   ├── __main__.py            # `python -m ontrack_dashboard`
+│   ├── main.py                # Entry point + logging setup
+│   ├── app.py                 # QMainWindow
+│   ├── telemetry.py           # AC RTCarInfo binary parser
+│   ├── network/udp_receiver.py# AC UDP client (handshake + subscribe)
+│   ├── widgets/               # QPainter-based gauges
+│   └── settings/              # Persisted config + settings dialog
+└── tests/
+    └── test_telemetry.py      # Protocol parser tests (pytest)
 ```
 
-## Installation & Setup
+## Why no plugin?
 
-### Game Plugin Setup (Windows - Assetto Corsa)
+AC ships an embedded Python 3.3 interpreter without the `_socket` C
+extension, which makes shipping a UDP-broadcasting plugin painful (you
+end up vendoring a binary `.pyd` from a long-EOL Python build). AC also
+ships a first-party UDP telemetry server on port **9996** that requires
+no enablement — sending a 12-byte handshake to that port makes AC start
+streaming `RTCarInfo` packets at the simulation frame rate. The
+dashboard uses that protocol directly. See `ontrack_dashboard/telemetry.py`
+for the byte layout, derived from the canonical Romagnoli/Kunos doc and
+cross-checked against
+[rickwest/ac-remote-telemetry-client](https://github.com/rickwest/ac-remote-telemetry-client).
 
-1. Copy the `game_plugin` folder to your Assetto Corsa installation:
-   ```
-   C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\apps\python\OnTrack\
-   ```
+The trade-off: `RTCarInfo` doesn't carry tyre temperatures or fuel level
+— those are only available via AC's shared-memory interface, which is
+same-machine only. The tyre-temps widget will render in its idle (cool)
+colour scheme until a shared-memory bridge is added.
 
-2. The folder should contain:
-   - `OnTrack.py`
-   - `OnTrack.ini`
-   - `config.py`
-   - `config.ini`
+## Install
 
-3. Launch AC, go to **Options → UI Modules** and enable "OnTrack"
+Python 3.10+ required.
 
-4. (Optional) Edit `config.ini` to change UDP target IP/port:
-   ```ini
-   [UDP]
-   ip = 192.168.1.100    # IP of machine running the dashboard
-   port = 20777
-   
-   [GENERAL]
-   update_rate_hz = 30
-   ```
+```bash
+pip install -e .              # runtime only
+pip install -e ".[dev]"       # plus pytest + ruff
+```
 
-### Dashboard Setup (macOS/Windows/Linux)
+Run:
 
-1. Install Python 3.8+ (if not already installed)
-
-2. Install dependencies:
-   ```bash
-   cd dashboard
-   pip install -r requirements.txt
-   ```
-
-3. Run the dashboard:
-   ```bash
-   python main.py
-   ```
+```bash
+ontrack                       # console script (preferred)
+python -m ontrack_dashboard   # module form, identical behaviour
+```
 
 ## Usage
 
-### Same Machine (Game + Dashboard on Windows)
+### Same machine (game + dashboard on the same Windows box)
 
-1. In `game_plugin/config.ini`, set:
-   ```ini
-   [UDP]
-   ip = 127.0.0.1
-   port = 20777
-   ```
+1. Launch Assetto Corsa, enter a session (any car/track).
+2. In another terminal: `ontrack`.
+3. Within ~2 s the dashboard handshakes AC and starts receiving frames.
 
-2. Launch AC and enable the OnTrack plugin
+Defaults are `ac_ip = 127.0.0.1`, `ac_port = 9996` — same-machine works
+out of the box.
 
-3. Run the dashboard: `python main.py`
+### Across the LAN (game on Windows, dashboard on Mac/Linux)
 
-### Across Network (Game on Windows, Dashboard on macOS)
+1. On the Windows machine, find the LAN IP: `ipconfig` → look at the
+   IPv4 address of the active adapter (e.g. `192.168.1.50`).
+2. On the other machine, run `ontrack`, open **File → Settings**, set
+   **AC server IP** to that address, **Apply**.
 
-1. Find your macOS machine's local IP (e.g., `192.168.1.50`):
-   ```bash
-   ifconfig | grep "inet " | grep -v 127.0.0.1
-   ```
+The dashboard will keep retrying the handshake every two seconds, so it
+will auto-connect as soon as AC enters a session.
 
-2. In `game_plugin/config.ini`, set:
-   ```ini
-   [UDP]
-   ip = 192.168.1.50
-   port = 20777
-   ```
+## Settings
 
-3. Launch AC and enable the OnTrack plugin
+**File → Settings** exposes:
 
-4. On macOS, run the dashboard: `python main.py`
+- **AC server IP** — `127.0.0.1` for same-machine, otherwise the LAN IP
+  of the box running AC.
+- **AC UDP port** — `9996` (don't change unless you know AC has been
+  configured otherwise).
+- **Max RPM** — calibrates the RPM bar's redline marker.
+- **Speed unit** — km/h or mph.
+- **Dark mode** — palette toggle.
+- **Widget visibility** — show / hide individual gauges.
 
-### Configuration
+Settings live at `~/.config/ontrack/settings.json` on all platforms.
 
-Open **File → Settings** in the dashboard to:
+## Wire format
 
-- **UDP Binding**: Set the IP and port the dashboard listens on
-  - `0.0.0.0` = listen on all interfaces (default)
-  - `127.0.0.1` = only localhost
-  - `192.168.x.x` = specific interface
+AC's remote telemetry uses a tiny custom protocol:
 
-- **Display Settings**:
-  - Max RPM (for gauge calibration)
-  - Speed unit (km/h or mph)
-  - Dark mode toggle
+| Direction | Payload | Size |
+|---|---|---|
+| Client → AC | `<3i`: `(identifier, version, operation)` | 12 B |
+| AC → Client (after `op=0`) | Handshake response (4× UTF-16LE strings + 2 ints) | 408 or 808 B |
+| AC → Client (after `op=1`) | `RTCarInfo` stream | 328 B / packet |
 
-- **Widget Visibility**: Show/hide individual widgets
+Operations: `0=HANDSHAKE`, `1=SUBSCRIBE_UPDATE`, `2=SUBSCRIBE_SPOT`,
+`3=DISMISS`. The dashboard sends `0` until it sees a handshake reply,
+then sends `1` to start the stream, and sends `3` at shutdown.
 
-## UDP Packet Format
+`RTCarInfo` byte layout (the fields the dashboard actually reads): see
+`_RT_CAR_INFO_FMT` in `ontrack_dashboard/telemetry.py:78` — verified
+against `RT_CAR_INFO_SIZE == 328`.
 
-The plugin broadcasts JSON packets every frame. Example:
+## Testing without AC
 
-```json
-{
-  "v": 1,
-  "spd": 142.7,
-  "rpm": 6800,
-  "gear": 4,
-  "thr": 0.82,
-  "brk": 0.0,
-  "fuel": 34.2,
-  "lap": 3,
-  "lap_t": 87432,
-  "best_t": 85120,
-  "last_t": 86890,
-  "tyre": [78.2, 79.1, 81.4, 80.0],
-  "gx": -0.12,
-  "gy": 1.43,
-  "gz": 0.02
-}
-```
-
-**Field Reference:**
-- `v`: Protocol version (for future compatibility)
-- `spd`: Speed in km/h
-- `rpm`: Engine RPM
-- `gear`: 0=Reverse, 1=Neutral, 2+=Gears
-- `thr`: Throttle input (0.0–1.0)
-- `brk`: Brake input (0.0–1.0)
-- `fuel`: Fuel remaining (liters)
-- `lap`: Current lap number
-- `lap_t`: Current lap time (ms)
-- `best_t`: Best lap time (ms)
-- `last_t`: Last lap time (ms)
-- `tyre`: [FL, FR, RL, RR] tire temps (°C)
-- `gx`, `gy`, `gz`: G-forces (lateral, longitudinal, vertical)
-
-## Testing Without Game
-
-Test the dashboard without AC running:
+The protocol layer is fully unit-tested with synthetic byte buffers:
 
 ```bash
-# Terminal 1: Start the dashboard
-cd dashboard
-python main.py
-
-# Terminal 2: Send test UDP packets
-python3 -c "
-import socket
-import json
-import time
-
-data = {
-    'v': 1, 'spd': 150, 'rpm': 7000, 'gear': 4,
-    'thr': 0.8, 'brk': 0.0, 'fuel': 30,
-    'lap': 2, 'lap_t': 87000, 'best_t': 85000, 'last_t': 86000,
-    'tyre': [80, 82, 78, 79], 'gx': -0.5, 'gy': 1.2, 'gz': 0.1
-}
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-for i in range(100):
-    data['spd'] = 100 + i
-    data['rpm'] = 3000 + i * 50
-    sock.sendto(json.dumps(data).encode('utf-8'), ('127.0.0.1', 20777))
-    time.sleep(0.033)
-sock.close()
-"
+pip install -e ".[dev]"
+pytest
 ```
+
+12 tests covering the handshake encoder, struct layout sanity, decoding
+of all consumed `RTCarInfo` fields, RPM rounding, fields-not-in-protocol
+defaulting to zero, packet immutability, and rejection of malformed
+datagrams.
 
 ## Troubleshooting
 
-### Dashboard not receiving data
+**Dashboard logs `UDP receiver listening` then no telemetry arrives.**
+That message confirms the socket is up but says nothing about AC. Check:
+- AC is *in a session* — handshakes only get a response once the physics
+  engine is running (post-loading-screen).
+- `ac_ip` matches the box running AC. For same-machine that's
+  `127.0.0.1`; the AC machine's own LAN IP also works.
+- Nothing else is listening on UDP 9996 on the AC box (other telemetry
+  apps can compete for the port).
 
-1. **Check UDP settings**: File → Settings, verify IP and port
-2. **Check firewall**: Ensure port 20777 is not blocked
-3. **Plugin not enabled**: In AC, go to Options → UI Modules and enable "OnTrack"
-4. **Wrong IP in config**: If game and dashboard are on different machines, check `game_plugin/config.ini`
+**Dashboard runs but stays connected to a stale AC session.**
+The receiver detects packet timeout after 5 s of silence and drops back
+to handshake retries. Just keep it running through your session switch.
 
-### Plugin not showing in AC
+**Cross-machine setup not connecting.**
+Windows Firewall on the AC machine blocks inbound UDP by default. Allow
+`acs.exe` on the Private network profile, or temporarily disable the
+firewall on the AC adapter to confirm it's the cause.
 
-1. Ensure folder structure is correct:
-   ```
-   assettocorsa/apps/python/OnTrack/OnTrack.py
-   assettocorsa/apps/python/OnTrack/OnTrack.ini
-   ```
+## Development notes
 
-2. Check for syntax errors in `OnTrack.py` (must be Python 3.3 compatible)
-
-3. Check AC's `Documents/assettocorsa/logs/py_log.txt` for error messages
-
-### Dashboard crashes on startup
-
-1. Ensure PyQt6 is installed:
-   ```bash
-   pip install PyQt6>=6.4.0
-   ```
-
-2. Check Python version (3.8+ required):
-   ```bash
-   python3 --version
-   ```
-
-## Performance Notes
-
-- Plugin sends ~30 packets/second (configurable)
-- Dashboard updates all widgets on each received packet
-- Minimal CPU usage (<1% on modern hardware)
-- Works well across home network (LAN) latency
+- **Python 3.10+** for the dashboard (`from __future__ import
+  annotations`, `X | None`, `match`, `tuple[...]` generics in runtime
+  contexts).
+- **Single source of truth** for the wire format is
+  `ontrack_dashboard/telemetry.py`. Widgets consume the typed
+  `TelemetryPacket` dataclass; no field-name stringly-typed dict access
+  anywhere in the rendering path.
+- **Logging** via `logging` (configured in `main.py`); never `print`.
+- **Threading** via `QThread`, emitting `pyqtSignal(object)` carrying
+  immutable `TelemetryPacket` instances — safe to consume on the GUI
+  thread.
+- **Lint** via ruff (config in `pyproject.toml`); tests via pytest.
 
 ## License
 
 Free to use and modify.
-
-## Development Notes
-
-### Plugin (Python 3.3)
-
-The AC plugin uses **Python 3.3** syntax exclusively:
-- No f-strings (use `.format()` instead)
-- No type hints
-- No async/await or threading
-- Non-blocking UDP socket for fire-and-forget broadcast
-
-### Dashboard (Python 3.8+)
-
-The dashboard uses modern Python and PyQt6:
-- Type hints for clarity
-- Threading for UDP receiver
-- Qt signals/slots for thread-safe GUI updates
-
-## Future Enhancements
-
-- [ ] G-force visualization widget
-- [ ] Brake bias indicator
-- [ ] Diff lock percentage
-- [ ] Engine temperature monitoring
-- [ ] Damage visualization
-- [ ] Stint timer
-- [ ] Export telemetry to CSV
-- [ ] Recording/playback mode
-# OnTrack
