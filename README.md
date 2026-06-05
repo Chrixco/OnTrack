@@ -7,29 +7,37 @@ required**, no AC config edits, no firewall holes for same-machine setups.
 ## Features
 
 - Speed gauge, RPM bar with shift indicator, gear display
-- Throttle / brake input bars
+- Throttle / brake input bars plus a rolling 7 s input trace
 - Current / best / last lap times with delta vs. best
-- G-forces visualised via the existing read-outs
+- G-force ball with trail, lateral / longitudinal read-out
+- Tyre core temperatures and fuel level (via AC's shared-memory
+  interface, overlaid onto the UDP stream — same-machine only)
+- Auto-recorded circuit map with live position dot
 - Auto-handshake: starts polling AC every 2 s, connects the moment a
   session begins, reconnects after a session restart
-- Dark / light mode, km/h or mph, configurable max RPM, per-widget
-  visibility toggles
+- In-app console (Ctrl+Shift+C) with live values + filterable log
+- Dark / light mode, km/h or mph, configurable max RPM
 
 ## Architecture
 
 ```
 OnTrack/
-├── pyproject.toml             # Package metadata, deps, entry points
-├── ontrack_dashboard/         # Dashboard package (Python 3.10+)
-│   ├── __main__.py            # `python -m ontrack_dashboard`
-│   ├── main.py                # Entry point + logging setup
-│   ├── app.py                 # QMainWindow
-│   ├── telemetry.py           # AC RTCarInfo binary parser
-│   ├── network/udp_receiver.py# AC UDP client (handshake + subscribe)
-│   ├── widgets/               # QPainter-based gauges
-│   └── settings/              # Persisted config + settings dialog
+├── pyproject.toml               # Package metadata, deps, entry points
+├── ontrack_dashboard/           # Dashboard package (Python 3.10+)
+│   ├── __main__.py              # `python -m ontrack_dashboard`
+│   ├── main.py                  # Entry point + logging setup
+│   ├── app.py                   # QMainWindow + merged-packet dispatch
+│   ├── telemetry.py             # AC RTCarInfo binary parser
+│   ├── theme.py                 # Colours, fonts, global QSS
+│   ├── logging_bridge.py        # In-app console log bus
+│   ├── network/
+│   │   ├── udp_receiver.py      # AC UDP client (handshake + subscribe)
+│   │   └── shared_memory.py     # acpmf_physics reader (tyre temps, fuel)
+│   ├── widgets/                 # QPainter-based gauges + cards
+│   └── settings/                # Persisted config + settings dialog
 └── tests/
-    └── test_telemetry.py      # Protocol parser tests (pytest)
+    ├── test_telemetry.py        # UDP protocol parser tests (pytest)
+    └── test_shared_memory.py    # Shared-memory struct + reader tests
 ```
 
 ## Why no plugin?
@@ -45,10 +53,12 @@ for the byte layout, derived from the canonical Romagnoli/Kunos doc and
 cross-checked against
 [rickwest/ac-remote-telemetry-client](https://github.com/rickwest/ac-remote-telemetry-client).
 
-The trade-off: `RTCarInfo` doesn't carry tyre temperatures or fuel level
-— those are only available via AC's shared-memory interface, which is
-same-machine only. The tyre-temps widget will render in its idle (cool)
-colour scheme until a shared-memory bridge is added.
+The trade-off: `RTCarInfo` doesn't carry tyre temperatures or fuel
+level. Those come from AC's first-party shared-memory interface
+(`Local\acpmf_physics`), which `network/shared_memory.py` reads in a
+parallel thread and overlays onto the UDP stream. Shared memory is
+same-machine only, so over the LAN the tyre-temps and fuel read-outs
+fall back to their idle state while everything else stays live.
 
 ## Install
 
@@ -98,7 +108,6 @@ will auto-connect as soon as AC enters a session.
 - **Max RPM** — calibrates the RPM bar's redline marker.
 - **Speed unit** — km/h or mph.
 - **Dark mode** — palette toggle.
-- **Widget visibility** — show / hide individual gauges.
 
 Settings live at `~/.config/ontrack/settings.json` on all platforms.
 
@@ -129,10 +138,11 @@ pip install -e ".[dev]"
 pytest
 ```
 
-12 tests covering the handshake encoder, struct layout sanity, decoding
+25 tests covering the handshake encoder, struct layout sanity, decoding
 of all consumed `RTCarInfo` fields, RPM rounding, fields-not-in-protocol
-defaulting to zero, packet immutability, and rejection of malformed
-datagrams.
+defaulting to zero, packet immutability, rejection of malformed
+datagrams, and the shared-memory physics struct (canonical field
+offsets + reader sleep behaviour).
 
 ## Troubleshooting
 
