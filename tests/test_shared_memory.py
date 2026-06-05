@@ -15,6 +15,7 @@ import ctypes
 
 import pytest
 
+from ontrack_dashboard.network import shared_memory
 from ontrack_dashboard.network.shared_memory import (
     PHYSICS_STRUCT_SIZE,
     PhysicsPacket,
@@ -95,3 +96,35 @@ def test_packet_immutable() -> None:
     packet = PhysicsPacket()
     with pytest.raises((AttributeError, TypeError)):
         packet.fuel = 99.0  # type: ignore[misc]
+
+
+def test_sleep_never_passes_negative_to_time_sleep(monkeypatch) -> None:
+    """Regression: the poll-sleep crashed the reader thread when the clock
+    advanced past the deadline between the loop check and the sleep call,
+    yielding `time.sleep(<negative>)` -> ValueError. Reproduced live on an
+    AC track reload (mugello -> ks_vallelunga). The helper must clamp the
+    remaining time and never hand a negative value to time.sleep.
+    """
+    # Bypass QThread.__init__ -- _sleep only touches self._running + time.
+    reader = shared_memory.SharedMemoryReader.__new__(
+        shared_memory.SharedMemoryReader
+    )
+    reader._running = True
+
+    # Adversarial clock: deadline = 100.0 + 0.05 = 100.05. The second tick
+    # is just under the deadline; the third slips just past it -- exactly
+    # the race that produced a negative remaining time.
+    ticks = iter([100.0, 100.049, 100.051, 100.2])
+    monkeypatch.setattr(shared_memory.time, "monotonic", lambda: next(ticks))
+
+    slept: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        assert seconds >= 0, f"time.sleep got negative value {seconds}"
+        slept.append(seconds)
+
+    monkeypatch.setattr(shared_memory.time, "sleep", fake_sleep)
+
+    reader._sleep(0.05)  # must return cleanly, never raise
+
+    assert slept and all(s >= 0 for s in slept)

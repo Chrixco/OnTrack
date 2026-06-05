@@ -201,8 +201,11 @@ class SharedMemoryReader(QThread):
     def _sleep(self, seconds: float) -> None:
         # Coarse stop responsiveness without a dedicated event primitive.
         deadline = time.monotonic() + seconds
-        while self._running and time.monotonic() < deadline:
-            time.sleep(min(0.05, deadline - time.monotonic()))
+        while self._running:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.05, remaining))
 
     def stop(self) -> None:
         self._running = False
