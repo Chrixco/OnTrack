@@ -9,7 +9,7 @@ touching code so you don't relearn the gotchas the hard way.
 ```bash
 pip install -e ".[dev]"     # one-time
 ontrack                     # launches the dashboard (or: python -m ontrack_dashboard)
-pytest                      # 24 tests, all should be green
+pytest                      # 25 tests, all should be green
 python -m ruff check ontrack_dashboard tests
 python scripts/monitor.py   # one-shot data audit; --watch for continuous
 ```
@@ -111,7 +111,7 @@ ontrack_dashboard/
     ├── race_stats_panel.py lap counter, current/best/last, delta
     └── console_window.py   in-app log + live values, with filters
 
-tests/                      24 pytest cases (run `pytest -v` for the list)
+tests/                      25 pytest cases (run `pytest -v` for the list)
 scripts/monitor.py          standalone CLI audit tool
 ```
 
@@ -197,6 +197,15 @@ In rough priority order:
 - **Don't force-push without `--force-with-lease`.** When pushing to
   a divergent main, see the `feedback-ontrack-push` memory for the
   established workflow.
+- **Don't let an exception escape a `QThread.run()`.** An unhandled
+  exception in a reader thread's `run()` aborts the whole process — the
+  window just vanishes with a traceback on stderr, no dialog. The SHM
+  reader's `_sleep` once handed a negative duration to `time.sleep`
+  (clock slipped past the deadline mid-loop) and took the app down on a
+  track reload (mugello → ks_vallelunga). Now fixed by clamping the
+  remaining time; regression test in `tests/test_shared_memory.py`
+  (`test_sleep_never_passes_negative_to_time_sleep`). Guard loop bodies
+  and clamp any computed sleep/timeout you pass into stdlib calls.
 
 ## Useful one-liners
 
